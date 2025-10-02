@@ -1,0 +1,121 @@
+# Copyright (C) 2024 MSS-TF-Locoformer
+# SPDX-License-Identifier: Apache-2.0
+
+# Configuration for MUSDB18 dataset training
+
+# Dataset configuration
+dataset:
+  name: musdb18hq
+  root_dir: "/workspace/musdb18hq"  # MUSDB18-HQ dataset path
+  sample_rate: 44100
+  segment_length: 441000  # 10 seconds at 44.1kHz (increased for better context)
+  sources:
+    - vocals
+    - drums
+    - bass
+    - other
+  augmentation: true
+  random_chunks: true
+
+# Model configuration (Optimized for RTX 5090 32GB VRAM)
+model:
+  n_fft: 4096  # Increased for better frequency resolution
+  hop_length: 1024
+  n_sources: 4
+  n_layers: 8  # Increased from 6 for more capacity
+  emb_dim: 192  # Increased from 128 for larger model
+  norm_type: rmsgroupnorm
+  num_groups: 4
+  tf_order: ft  # frequency-then-time
+  n_heads: 8  # Increased from 4 for better attention
+  flash_attention: true  # Enabled for RTX 5090 (requires PyTorch 2.0+)
+  attention_dim: 192  # Increased from 128
+  pos_enc: rope  # rope or nope
+  ffn_type:
+    - swiglu_conv1d
+    - swiglu_conv1d
+  ffn_hidden_dim:
+    - 768  # Increased from 384
+    - 768  # Macaron-style FFN
+  conv1d_kernel: 4
+  conv1d_shift: 1
+  dropout: 0.1  # Added dropout for regularization
+  eps: 1.0e-5
+
+# Loss configuration
+loss:
+  loss_type: combined  # si_sdr, l1, l2, or combined
+  si_sdr_weight: 1.0
+  l1_weight: 0.1
+  spectral_weight: 0.1
+  eps: 1.0e-8
+
+# Training configuration (Optimized for RTX 5090 32GB VRAM)
+training:
+  batch_size: 12  # Increased from 4 to utilize 32GB VRAM
+  num_epochs: 300  # Increased for better convergence
+  gradient_clip: 5.0
+  num_workers: 8  # Increased for faster data loading
+  pin_memory: true
+  prefetch_factor: 4  # Prefetch batches for efficiency
+  
+  # Optimizer
+  optimizer:
+    type: adamw
+    lr: 0.0005  # Slightly reduced for larger batch size
+    weight_decay: 0.01
+    eps: 1.0e-8
+    betas: [0.9, 0.999]  # Adam beta parameters
+  
+  # Learning rate scheduler
+  scheduler:
+    type: reducelronplateau
+    mode: min
+    factor: 0.5
+    patience: 8  # Increased patience for larger model
+    min_lr: 1.0e-7
+    cooldown: 5  # Cooldown period after LR reduction
+  
+  # Mixed precision (RTX 5090 supports BF16 and FP16)
+  use_amp: true  # Enabled for faster training
+  amp_dtype: bfloat16  # Use BF16 on RTX 5090 for better stability
+  
+  # Gradient accumulation (optional, for even larger effective batch)
+  gradient_accumulation_steps: 1
+  
+  # Checkpointing
+  save_interval: 5  # Save every N epochs
+  keep_last: 10  # Keep more checkpoints with 32GB storage
+  save_best: true  # Save best model separately
+  
+  # Validation
+  val_interval: 1  # Validate every N epochs
+
+# Evaluation configuration
+evaluation:
+  batch_size: 1
+  save_outputs: true
+  metrics:
+    - si_sdr
+    - sdr
+    - sar
+    - sir
+
+# Paths
+paths:
+  output_dir: "./experiments"
+  checkpoint_dir: "./experiments/checkpoints"
+  log_dir: "./experiments/logs"
+
+# Hardware configuration
+seed: 42
+device: cuda
+num_gpu: 1  # RTX 5090
+gpu_id: 0
+
+# Performance optimization
+performance:
+  cudnn_benchmark: true  # Enable cuDNN autotuner
+  cudnn_deterministic: false  # Disable for better performance
+  tf32: true  # Enable TF32 on RTX 5090 for faster matmul
+  compile_model: false  # PyTorch 2.0+ model compilation (experimental)

@@ -1,0 +1,111 @@
+# Copyright (C) 2024 MSS-TF-Locoformer
+# SPDX-License-Identifier: Apache-2.0
+
+# Small model configuration for faster training/testing
+
+# Dataset configuration
+dataset:
+  name: musdb18hq
+  root_dir: "/workspace/musdb18hq"  # MUSDB18-HQ dataset path
+  sample_rate: 44100
+  segment_length: 220500  # 5 seconds at 44.1kHz (increased from 3s)
+  sources:
+    - vocals
+    - drums
+    - bass
+    - other
+  augmentation: true
+  random_chunks: true
+
+# Model configuration (small but optimized for RTX 5090)
+model:
+  n_fft: 2048  # Increased from 1024
+  hop_length: 512
+  n_sources: 4
+  n_layers: 6  # Increased from 4
+  emb_dim: 96  # Increased from 64
+  norm_type: rmsgroupnorm
+  num_groups: 4
+  tf_order: ft
+  n_heads: 6  # Increased from 4
+  flash_attention: true  # Enabled for RTX 5090
+  attention_dim: 96  # Increased from 64
+  pos_enc: rope
+  ffn_type:
+    - swiglu_conv1d
+    - swiglu_conv1d
+  ffn_hidden_dim:
+    - 384  # Increased from 192
+    - 384
+  conv1d_kernel: 4
+  conv1d_shift: 1
+  dropout: 0.1
+  eps: 1.0e-5
+
+# Loss configuration
+loss:
+  loss_type: si_sdr
+  si_sdr_weight: 1.0
+  l1_weight: 0.0
+  spectral_weight: 0.0
+  eps: 1.0e-8
+
+# Training configuration (Optimized for RTX 5090)
+training:
+  batch_size: 24  # Increased from 8 for RTX 5090
+  num_epochs: 150  # Increased from 100
+  gradient_clip: 5.0
+  num_workers: 8
+  pin_memory: true
+  prefetch_factor: 4
+  
+  optimizer:
+    type: adamw
+    lr: 0.001
+    weight_decay: 0.01
+    eps: 1.0e-8
+    betas: [0.9, 0.999]
+  
+  scheduler:
+    type: reducelronplateau
+    mode: min
+    factor: 0.5
+    patience: 5  # Increased from 3
+    min_lr: 1.0e-7
+    cooldown: 3
+  
+  use_amp: true  # Enabled for faster training
+  amp_dtype: bfloat16  # BF16 for RTX 5090
+  gradient_accumulation_steps: 1
+  
+  save_interval: 5
+  keep_last: 5
+  save_best: true
+  val_interval: 1
+
+# Evaluation configuration
+evaluation:
+  batch_size: 1
+  save_outputs: false
+  metrics:
+    - si_sdr
+    - sdr
+
+# Paths
+paths:
+  output_dir: "./experiments_small"
+  checkpoint_dir: "./experiments_small/checkpoints"
+  log_dir: "./experiments_small/logs"
+
+# Hardware configuration
+seed: 42
+device: cuda
+num_gpu: 1  # RTX 5090
+gpu_id: 0
+
+# Performance optimization
+performance:
+  cudnn_benchmark: true
+  cudnn_deterministic: false
+  tf32: true  # RTX 5090 TF32 support
+  compile_model: false

@@ -1,6 +1,36 @@
-# Copyright (C) 2024 Mitsubishi Electric Research Laboratories (MERL)
-#
+# Copyright (C) 2024 MSS-TF-Locoformer
 # SPDX-License-Identifier: Apache-2.0
 
-espnet
+# Core dependencies for MSS-TF-Locoformer
+torch>=2.0.0
+torchaudio>=2.0.0
+numpy>=1.22.0
+scipy>=1.9.0
+
+# Audio processing
+soundfile>=0.12.0
+librosa>=0.10.0
+
+# Configuration and utilities
+pyyaml>=6.0
+omegaconf>=2.3.0
+
+# Logging and visualization
+tensorboard>=2.11.0
+tqdm>=4.64.0
+
+# Model-specific
 rotary-embedding-torch==0.6.1
+
+# Dataset handling (optional)
+musdb>=0.4.0
+museval>=0.4.0
+stempeg>=0.2.3
+
+# Development dependencies (optional)
+pytest>=7.2.0
+black>=22.0.0
+flake8>=5.0.0
+
+# For ESPnet compatibility (if needed)
+# espnet>=202301

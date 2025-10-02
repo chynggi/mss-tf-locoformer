@@ -1,0 +1,145 @@
+# Copyright (C) 2024 MSS-TF-Locoformer
+# SPDX-License-Identifier: Apache-2.0
+
+# Large model configuration optimized for RTX 5090 32GB VRAM
+# This configuration pushes the limits of the RTX 5090 for maximum quality
+
+# Dataset configuration
+dataset:
+  name: musdb18hq
+  root_dir: "/workspace/musdb18hq"  # MUSDB18-HQ dataset path
+  sample_rate: 44100
+  segment_length: 661500  # 15 seconds at 44.1kHz (long context)
+  sources:
+    - vocals
+    - drums
+    - bass
+    - other
+  augmentation: true
+  random_chunks: true
+
+# Model configuration (Extra Large for RTX 5090 32GB)
+model:
+  n_fft: 4096  # High frequency resolution
+  hop_length: 1024
+  n_sources: 4
+  n_layers: 12  # Deep model for maximum capacity
+  emb_dim: 256  # Large embedding dimension
+  norm_type: rmsgroupnorm
+  num_groups: 8  # More groups for better normalization
+  tf_order: ft  # frequency-then-time
+  n_heads: 16  # Many attention heads for rich representations
+  flash_attention: true  # Essential for large model efficiency
+  attention_dim: 256
+  pos_enc: rope  # Rotary position encoding
+  ffn_type:
+    - swiglu_conv1d
+    - swiglu_conv1d
+  ffn_hidden_dim:
+    - 1024  # Large FFN for more capacity
+    - 1024
+  conv1d_kernel: 4
+  conv1d_shift: 1
+  dropout: 0.15  # Higher dropout for regularization
+  eps: 1.0e-5
+
+# Loss configuration
+loss:
+  loss_type: combined  # Use all loss types
+  si_sdr_weight: 1.0
+  l1_weight: 0.1
+  spectral_weight: 0.15  # Higher weight for spectral quality
+  eps: 1.0e-8
+
+# Training configuration (Max utilization of RTX 5090 32GB)
+training:
+  batch_size: 8  # Reduced for 15s segments
+  num_epochs: 400  # Long training for convergence
+  gradient_clip: 5.0
+  num_workers: 12  # More workers for data loading
+  pin_memory: true
+  prefetch_factor: 6  # Prefetch more batches
+  persistent_workers: true  # Keep workers alive
+  
+  # Optimizer
+  optimizer:
+    type: adamw
+    lr: 0.0003  # Lower LR for large model
+    weight_decay: 0.01
+    eps: 1.0e-8
+    betas: [0.9, 0.999]
+    fused: true  # Use fused AdamW for RTX 5090
+  
+  # Learning rate scheduler with warmup
+  scheduler:
+    type: reducelronplateau
+    mode: min
+    factor: 0.5
+    patience: 10  # More patience for large model
+    min_lr: 1.0e-8
+    cooldown: 8
+  
+  # Warmup (first N steps)
+  warmup_steps: 1000
+  warmup_start_lr: 1.0e-6
+  
+  # Mixed precision (BF16 for stability with large model)
+  use_amp: true
+  amp_dtype: bfloat16  # BF16 is more stable than FP16 for large models
+  
+  # Gradient accumulation for larger effective batch
+  gradient_accumulation_steps: 2  # Effective batch size = 8 * 2 = 16
+  
+  # Gradient checkpointing to save memory
+  gradient_checkpointing: false  # Set to true if OOM
+  
+  # Checkpointing
+  save_interval: 5
+  keep_last: 15  # Keep more checkpoints
+  save_best: true
+  save_optimizer: true  # Save optimizer state
+  
+  # Validation
+  val_interval: 1
+  
+  # Early stopping
+  early_stopping:
+    enabled: true
+    patience: 20  # Stop if no improvement for 20 epochs
+    min_delta: 0.0001  # Minimum improvement threshold
+
+# Evaluation configuration
+evaluation:
+  batch_size: 1
+  save_outputs: true
+  metrics:
+    - si_sdr
+    - sdr
+    - sar
+    - sir
+
+# Paths
+paths:
+  output_dir: "./experiments_xlarge"
+  checkpoint_dir: "./experiments_xlarge/checkpoints"
+  log_dir: "./experiments_xlarge/logs"
+
+# Hardware configuration
+seed: 42
+device: cuda
+num_gpu: 1  # RTX 5090
+gpu_id: 0
+
+# Performance optimization (RTX 5090 specific)
+performance:
+  cudnn_benchmark: true  # Enable cuDNN autotuner
+  cudnn_deterministic: false  # Disable for performance
+  tf32: true  # Enable TensorFloat-32 on RTX 5090
+  compile_model: false  # PyTorch 2.0+ torch.compile (experimental)
+  channels_last: false  # Memory format optimization
+  
+  # CUDA optimizations
+  cuda:
+    allow_tf32_matmul: true  # TF32 for matrix multiplications
+    allow_tf32_conv: true  # TF32 for convolutions
+    max_split_size_mb: 512  # Memory allocator split size
