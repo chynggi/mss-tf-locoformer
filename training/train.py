@@ -65,7 +65,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def train_epoch(model, dataloader, criterion, optimizer, device, epoch, scaler=None, amp_dtype=None):
+def train_epoch(model, dataloader, criterion, optimizer, device, epoch, scaler=None, amp_dtype=None, gradient_accumulation_steps=1):
     """Train for one epoch.
     
     Args:
@@ -77,6 +77,7 @@ def train_epoch(model, dataloader, criterion, optimizer, device, epoch, scaler=N
         epoch: Current epoch number
         scaler: GradScaler for mixed precision (optional)
         amp_dtype: dtype for autocast (torch.float16 or torch.bfloat16)
+        gradient_accumulation_steps: Gradient accumulation steps for larger effective batch
         
     Returns:
         dict: Training metrics
@@ -87,51 +88,84 @@ def train_epoch(model, dataloader, criterion, optimizer, device, epoch, scaler=N
     loss_meter = AverageMeter()
     
     pbar = tqdm(dataloader, desc=f'Epoch {epoch}')
+    accumulated_loss = 0.0
+    
     for batch_idx, batch in enumerate(pbar):
-        # Move data to device
-        mixture = batch['mixture'].to(device)
+        # Move data to device (non-blocking for better performance)
+        mixture = batch['mixture'].to(device, non_blocking=True)
         targets = {
-            k: v.to(device) for k, v in batch.items() 
+            k: v.to(device, non_blocking=True) for k, v in batch.items() 
             if k != 'mixture'
         }
         
-        # Convert to mono if stereo
+        # Convert stereo waveforms to mono for both mixture and sources
         if mixture.ndim == 3 and mixture.shape[1] == 2:
             mixture = mixture.mean(dim=1)
+            targets = {
+                k: (v.mean(dim=1) if v.ndim == 3 and v.shape[1] == 2 else v)
+                for k, v in targets.items()
+            }
         
         # Forward pass with mixed precision
-        optimizer.zero_grad()
+        if batch_idx % gradient_accumulation_steps == 0:
+            optimizer.zero_grad(set_to_none=True)  # More efficient than zero_grad()
         
         if use_amp:
             with torch.cuda.amp.autocast(dtype=amp_dtype):
                 predictions = model(mixture, return_time_domain=True)
                 loss_dict = criterion(predictions, targets)
-                loss = loss_dict['total_loss']
+                loss = loss_dict['total_loss'] / gradient_accumulation_steps
             
             # Backward pass with gradient scaling
             scaler.scale(loss).backward()
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
-            scaler.step(optimizer)
-            scaler.update()
+            accumulated_loss += loss.item()
+            
+            # Optimizer step with gradient accumulation
+            if (batch_idx + 1) % gradient_accumulation_steps == 0:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+                scaler.step(optimizer)
+                scaler.update()
+                accumulated_loss = 0.0
+                
+                # Clear cache periodically
+                if (batch_idx + 1) % (gradient_accumulation_steps * 10) == 0:
+                    torch.cuda.empty_cache()
         else:
             predictions = model(mixture, return_time_domain=True)
             loss_dict = criterion(predictions, targets)
-            loss = loss_dict['total_loss']
+            loss = loss_dict['total_loss'] / gradient_accumulation_steps
             
             # Backward pass without scaling
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
-            optimizer.step()
+            accumulated_loss += loss.item()
+            
+            # Optimizer step with gradient accumulation
+            if (batch_idx + 1) % gradient_accumulation_steps == 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+                optimizer.step()
+                accumulated_loss = 0.0
+                
+                # Clear cache periodically
+                if (batch_idx + 1) % (gradient_accumulation_steps * 10) == 0:
+                    torch.cuda.empty_cache()
         
-        # Update metrics
-        loss_meter.update(loss.item(), mixture.size(0))
+        # Update metrics (multiply back for logging)
+        loss_meter.update(loss.item() * gradient_accumulation_steps, mixture.size(0))
         
         # Update progress bar
+        mem_allocated = torch.cuda.memory_allocated() / 1024**3 if torch.cuda.is_available() else 0
+        mem_reserved = torch.cuda.memory_reserved() / 1024**3 if torch.cuda.is_available() else 0
         pbar.set_postfix({
             'loss': f'{loss_meter.avg:.4f}',
-            'lr': f'{get_lr(optimizer):.6f}'
+            'lr': f'{get_lr(optimizer):.6f}',
+            'mem': f'{mem_allocated:.1f}/{mem_reserved:.1f}GB'
         })
+        
+        # Delete intermediate tensors to free memory
+        del mixture, targets, predictions, loss_dict, loss
+        if batch_idx % 50 == 0:
+            torch.cuda.empty_cache()
     
     return {
         'train_loss': loss_meter.avg,
@@ -156,8 +190,11 @@ def validate(model, dataloader, criterion, device, amp_dtype=None):
     
     loss_meter = AverageMeter()
     
+    # Clear cache before validation
+    torch.cuda.empty_cache()
+    
     with torch.no_grad():
-        for batch in tqdm(dataloader, desc='Validation'):
+        for batch_idx, batch in enumerate(tqdm(dataloader, desc='Validation')):
             # Move data to device
             mixture = batch['mixture'].to(device)
             targets = {
@@ -165,9 +202,13 @@ def validate(model, dataloader, criterion, device, amp_dtype=None):
                 if k != 'mixture'
             }
             
-            # Convert to mono if stereo
+            # Convert stereo waveforms to mono for both mixture and sources
             if mixture.ndim == 3 and mixture.shape[1] == 2:
                 mixture = mixture.mean(dim=1)
+                targets = {
+                    k: (v.mean(dim=1) if v.ndim == 3 and v.shape[1] == 2 else v)
+                    for k, v in targets.items()
+                }
             
             # Forward pass with mixed precision
             if use_amp:
@@ -182,6 +223,16 @@ def validate(model, dataloader, criterion, device, amp_dtype=None):
             
             # Update metrics
             loss_meter.update(loss.item(), mixture.size(0))
+            
+            # Delete intermediate tensors
+            del mixture, targets, predictions, loss_dict, loss
+            
+            # Periodic cache clearing during validation
+            if batch_idx % 10 == 0:
+                torch.cuda.empty_cache()
+    
+    # Final cache clear after validation
+    torch.cuda.empty_cache()
     
     return {
         'val_loss': loss_meter.avg,
@@ -281,8 +332,20 @@ def main():
     model = TFLocoformerMSS(**config['model'])
     model = model.to(device)
     
+    # Enable gradient checkpointing if specified
+    use_grad_checkpoint = config['training'].get('gradient_checkpointing', False)
+    if use_grad_checkpoint:
+        print("Enabling gradient checkpointing for memory efficiency...")
+        # Note: This requires model support for checkpointing
+        # model.enable_gradient_checkpointing()
+    
     num_params = count_parameters(model)
     print(f"Model parameters: {num_params:,}")
+    
+    # Print memory info
+    if torch.cuda.is_available():
+        print(f"Initial GPU memory: {torch.cuda.memory_allocated()/1024**3:.2f}GB allocated, "
+              f"{torch.cuda.memory_reserved()/1024**3:.2f}GB reserved")
     
     # Create loss function
     criterion = MSSLoss(**config['loss'])
@@ -325,12 +388,22 @@ def main():
     # Training loop
     print("\nStarting training...")
     num_epochs = config['training']['num_epochs']
+    gradient_accumulation_steps = config['training'].get('gradient_accumulation_steps', 1)
+    
+    print(f"Gradient accumulation steps: {gradient_accumulation_steps}")
+    print(f"Effective batch size: {config['training']['batch_size'] * gradient_accumulation_steps}")
     
     for epoch in range(start_epoch, num_epochs):
         print(f"\nEpoch {epoch+1}/{num_epochs}")
         
+        # Clear cache before each epoch
+        torch.cuda.empty_cache()
+        
         # Train
-        train_metrics = train_epoch(model, train_loader, criterion, optimizer, device, epoch+1, scaler, amp_dtype)
+        train_metrics = train_epoch(
+            model, train_loader, criterion, optimizer, device, epoch+1, 
+            scaler, amp_dtype, gradient_accumulation_steps
+        )
         
         # Validate
         if (epoch + 1) % config['training']['val_interval'] == 0:

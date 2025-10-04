@@ -1,0 +1,154 @@
+# Copyright (C) 2024 MSS-TF-Locoformer
+# SPDX-License-Identifier: Apache-2.0
+
+# Memory-optimized configuration for 97GB VRAM limit (RTX PRO 6000)
+# This configuration maximizes quality while staying within VRAM constraints
+
+# Dataset configuration
+dataset:
+  name: musdb18hq
+  root_dir: "/workspace/musdb18hq"  # MUSDB18-HQ dataset path
+  sample_rate: 44100
+  segment_length: 441000  # 10 seconds at 44.1kHz (reduced from 15s)
+  sources:
+    - vocals
+    - drums
+    - bass
+    - other
+  augmentation: false  # Disabled to save memory during training
+  random_chunks: true
+
+# Model configuration (Optimized for VRAM)
+model:
+  n_fft: 4096  # Keep high resolution
+  hop_length: 1024
+  n_sources: 4
+  n_layers: 8  # Reduced from 12
+  emb_dim: 192  # Reduced from 256
+  norm_type: rmsgroupnorm
+  num_groups: 8
+  tf_order: ft  # frequency-then-time
+  n_heads: 12  # Reduced from 16
+  flash_attention: true  # Essential for memory efficiency
+  attention_dim: 192  # Match emb_dim
+  pos_enc: rope  # Rotary position encoding
+  ffn_type:
+    - swiglu_conv1d
+    - swiglu_conv1d
+  ffn_hidden_dim:
+    - 768  # Reduced from 1024
+    - 768
+  conv1d_kernel: 4
+  conv1d_shift: 1
+  dropout: 0.15  # Keep dropout for regularization
+  eps: 1.0e-5
+
+# Loss configuration
+loss:
+  loss_type: combined
+  si_sdr_weight: 1.0
+  l1_weight: 0.1
+  spectral_weight: 0.15
+  eps: 1.0e-8
+
+# Training configuration (Aggressive memory optimization)
+training:
+  batch_size: 1  # Minimum batch size
+  num_epochs: 400
+  gradient_clip: 5.0
+  num_workers: 8  # Reduced to save system memory
+  pin_memory: true
+  prefetch_factor: 2  # Reduced prefetch
+  persistent_workers: true  # Keep workers alive
+  
+  # Optimizer
+  optimizer:
+    type: adamw
+    lr: 0.0003
+    weight_decay: 0.01
+    eps: 1.0e-8
+    betas: [0.9, 0.999]
+  
+  # Learning rate scheduler
+  scheduler:
+    type: reducelronplateau
+    mode: min
+    factor: 0.5
+    patience: 10
+    min_lr: 1.0e-8
+    cooldown: 8
+  
+  # Mixed precision (BF16 for stability)
+  use_amp: true
+  amp_dtype: bfloat16  # More stable than FP16
+  
+  # Gradient accumulation for larger effective batch (CRITICAL for memory)
+  gradient_accumulation_steps: 8  # Effective batch size = 1 * 8 = 8
+  
+  # Gradient checkpointing to save memory (trade speed for memory)
+  gradient_checkpointing: true  # Enable if still OOM
+  
+  # Checkpointing
+  save_interval: 5
+  keep_last: 10
+  save_best: true
+  save_optimizer: true
+  
+  # Validation
+  val_interval: 1
+  
+  # Early stopping
+  early_stopping:
+    enabled: true
+    patience: 20
+    min_delta: 0.0001
+
+# Evaluation configuration
+evaluation:
+  batch_size: 1
+  save_outputs: false  # Disable to save memory
+  metrics:
+    - si_sdr
+    - sdr
+    - sar
+    - sir
+
+# Paths
+paths:
+  output_dir: "./experiments_mem_opt"
+  checkpoint_dir: "./experiments_mem_opt/checkpoints"
+  log_dir: "./experiments_mem_opt/logs"
+
+# Hardware configuration
+seed: 42
+device: cuda
+num_gpu: 1
+gpu_id: 0
+
+# Performance optimization
+performance:
+  cudnn_benchmark: true
+  cudnn_deterministic: false
+  tf32: true  # Enable TensorFloat-32
+  compile_model: false  # Disable to save memory
+  channels_last: false
+  
+  # CUDA optimizations
+  cuda:
+    allow_tf32_matmul: true
+    allow_tf32_conv: true
+    max_split_size_mb: 256  # Smaller split for better memory management
+
+# Memory management strategies
+memory:
+  # Clear cache frequency (every N batches)
+  clear_cache_every: 10
+  
+  # Empty cache before validation
+  clear_before_validation: true
+  
+  # Use non-blocking transfers
+  non_blocking_transfer: true
+  
+  # Set gradients to None instead of zero (more efficient)
+  set_to_none: true
