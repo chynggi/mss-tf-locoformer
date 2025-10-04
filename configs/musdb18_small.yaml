@@ -8,35 +8,35 @@ dataset:
   name: musdb18hq
   root_dir: "/workspace/musdb18hq"  # MUSDB18-HQ dataset path
   sample_rate: 44100
-  segment_length: 220500  # 5 seconds at 44.1kHz (increased from 3s)
+  segment_length: 88200  # 2 seconds at 44.1kHz (reduced for VRAM)
   sources:
     - vocals
     - drums
     - bass
     - other
-  augmentation: true
+  augmentation: false  # Disabled to save memory
   random_chunks: true
 
-# Model configuration (small but optimized for RTX 5090)
+# Model configuration (ultra-small for VRAM constraints)
 model:
-  n_fft: 2048  # Increased from 1024
-  hop_length: 512
+  n_fft: 1024  # Reduced for less memory usage
+  hop_length: 256  # Reduced for less time frames
   n_sources: 4
-  n_layers: 6  # Increased from 4
-  emb_dim: 96  # Increased from 64
+  n_layers: 3  # Reduced to 3 layers
+  emb_dim: 48  # Reduced to 48
   norm_type: rmsgroupnorm
   num_groups: 4
   tf_order: ft
-  n_heads: 6  # Increased from 4
+  n_heads: 4  # Reduced to 4 heads
   flash_attention: true  # Enabled for RTX 5090
-  attention_dim: 96  # Increased from 64
+  attention_dim: 48  # Reduced to 48
   pos_enc: rope
   ffn_type:
     - swiglu_conv1d
     - swiglu_conv1d
   ffn_hidden_dim:
-    - 384  # Increased from 192
-    - 384
+    - 192  # Reduced to 192
+    - 192
   conv1d_kernel: 4
   conv1d_shift: 1
   dropout: 0.1
@@ -50,14 +50,15 @@ loss:
   spectral_weight: 0.0
   eps: 1.0e-8
 
-# Training configuration (Optimized for RTX 5090)
+# Training configuration (Memory-constrained)
 training:
-  batch_size: 24  # Increased from 8 for RTX 5090
-  num_epochs: 150  # Increased from 100
+  batch_size: 1  # Set to 1 for VRAM constraints
+  num_epochs: 150
   gradient_clip: 5.0
-  num_workers: 8
+  num_workers: 4  # Reduced workers
   pin_memory: true
-  prefetch_factor: 4
+  prefetch_factor: 2  # Reduced prefetch
+  gradient_checkpointing: false  # Enable gradient checkpointing to save memory
   
   optimizer:
     type: adamw

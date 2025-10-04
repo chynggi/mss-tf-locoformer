@@ -8,35 +8,35 @@ dataset:
   name: musdb18hq
   root_dir: "/workspace/musdb18hq"  # MUSDB18-HQ dataset path
   sample_rate: 44100
-  segment_length: 441000  # 10 seconds at 44.1kHz (increased for better context)
+  segment_length: 132300  # 3 seconds at 44.1kHz (reduced for VRAM)
   sources:
     - vocals
     - drums
     - bass
     - other
-  augmentation: true
+  augmentation: false  # Disabled to save memory
   random_chunks: true
 
-# Model configuration (Optimized for RTX 5090 32GB VRAM)
+# Model configuration (Reduced for VRAM constraints)
 model:
-  n_fft: 4096  # Increased for better frequency resolution
-  hop_length: 1024
+  n_fft: 2048  # Reduced from 4096
+  hop_length: 512  # Reduced from 1024
   n_sources: 4
-  n_layers: 8  # Increased from 6 for more capacity
-  emb_dim: 192  # Increased from 128 for larger model
+  n_layers: 4  # Reduced from 8
+  emb_dim: 96  # Reduced from 192
   norm_type: rmsgroupnorm
   num_groups: 4
   tf_order: ft  # frequency-then-time
-  n_heads: 8  # Increased from 4 for better attention
+  n_heads: 4  # Reduced from 8
   flash_attention: true  # Enabled for RTX 5090 (requires PyTorch 2.0+)
-  attention_dim: 192  # Increased from 128
+  attention_dim: 96  # Reduced from 192
   pos_enc: rope  # rope or nope
   ffn_type:
     - swiglu_conv1d
     - swiglu_conv1d
   ffn_hidden_dim:
-    - 768  # Increased from 384
-    - 768  # Macaron-style FFN
+    - 384  # Reduced from 768
+    - 384  # Macaron-style FFN
   conv1d_kernel: 4
   conv1d_shift: 1
   dropout: 0.1  # Added dropout for regularization
@@ -50,14 +50,15 @@ loss:
   spectral_weight: 0.1
   eps: 1.0e-8
 
-# Training configuration (Optimized for RTX 5090 32GB VRAM)
+# Training configuration (Memory-constrained)
 training:
-  batch_size: 12  # Increased from 4 to utilize 32GB VRAM
+  batch_size: 1  # Set to 1 for VRAM constraints
   num_epochs: 300  # Increased for better convergence
   gradient_clip: 5.0
-  num_workers: 8  # Increased for faster data loading
+  num_workers: 4  # Reduced for memory
   pin_memory: true
-  prefetch_factor: 4  # Prefetch batches for efficiency
+  prefetch_factor: 2  # Reduced prefetch
+  gradient_checkpointing: false  # Disable gradient checkpointing to save memory
   
   # Optimizer
   optimizer:
