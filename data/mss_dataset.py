@@ -96,9 +96,7 @@ class MUSDBDataset(Dataset):
         # Resample if necessary
         if sr != self.sample_rate:
             resampler = torchaudio.transforms.Resample(sr, self.sample_rate)
-            mixture_resampled = resampler(mixture)
-            del mixture  # Free original
-            mixture = mixture_resampled
+            mixture = resampler(mixture)
             del resampler  # Free resampler
         
         # Load sources
@@ -109,9 +107,7 @@ class MUSDBDataset(Dataset):
                 source_audio, sr = torchaudio.load(source_path)
                 if sr != self.sample_rate:
                     resampler = torchaudio.transforms.Resample(sr, self.sample_rate)
-                    source_audio_resampled = resampler(source_audio)
-                    del source_audio  # Free original
-                    source_audio = source_audio_resampled
+                    source_audio = resampler(source_audio)
                     del resampler  # Free resampler
                 sources_dict[source_name] = source_audio
             else:
@@ -150,13 +146,14 @@ class MUSDBDataset(Dataset):
         if total_length < self.segment_length:
             # Pad if track is shorter than segment_length
             pad_length = self.segment_length - total_length
-            for key in sources_dict:
+            padded_dict = {}
+            for key in list(sources_dict.keys()):
                 padded = torch.nn.functional.pad(
                     sources_dict[key],
                     (0, pad_length)
                 )
-                del sources_dict[key]  # Free original
-                sources_dict[key] = padded
+                padded_dict[key] = padded
+            sources_dict = padded_dict
         else:
             # Extract segment
             if self.random_chunks and self.subset == 'train':
@@ -167,10 +164,11 @@ class MUSDBDataset(Dataset):
                 start = 0
             
             end = start + self.segment_length
-            for key in sources_dict:
+            segmented_dict = {}
+            for key in list(sources_dict.keys()):
                 segment = sources_dict[key][:, start:end].contiguous()
-                del sources_dict[key]  # Free original
-                sources_dict[key] = segment
+                segmented_dict[key] = segment
+            sources_dict = segmented_dict
         
         return sources_dict
     
