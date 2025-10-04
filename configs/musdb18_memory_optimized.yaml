@@ -9,7 +9,7 @@ dataset:
   name: musdb18hq
   root_dir: "/workspace/musdb18hq"  # MUSDB18-HQ dataset path
   sample_rate: 44100
-  segment_length: 441000  # 10 seconds at 44.1kHz (reduced from 15s)
+  segment_length: 220500  # 5 seconds at 44.1kHz (CRITICAL: reduced for memory)
   sources:
     - vocals
     - drums
@@ -20,24 +20,24 @@ dataset:
 
 # Model configuration (Optimized for VRAM)
 model:
-  n_fft: 4096  # Keep high resolution
-  hop_length: 1024
+  n_fft: 2048  # Reduced to decrease frequency bins
+  hop_length: 512  # Reduced proportionally
   n_sources: 4
-  n_layers: 8  # Reduced from 12
-  emb_dim: 192  # Reduced from 256
+  n_layers: 6  # Further reduced from 8
+  emb_dim: 128  # Further reduced from 192
   norm_type: rmsgroupnorm
   num_groups: 8
   tf_order: ft  # frequency-then-time
-  n_heads: 12  # Reduced from 16
+  n_heads: 8  # Reduced from 12
   flash_attention: true  # Essential for memory efficiency
-  attention_dim: 192  # Match emb_dim
+  attention_dim: 128  # Match emb_dim
   pos_enc: rope  # Rotary position encoding
   ffn_type:
     - swiglu_conv1d
     - swiglu_conv1d
   ffn_hidden_dim:
-    - 768  # Reduced from 1024
-    - 768
+    - 512  # Further reduced from 768
+    - 512
   conv1d_kernel: 4
   conv1d_shift: 1
   dropout: 0.15  # Keep dropout for regularization
@@ -83,10 +83,10 @@ training:
   amp_dtype: bfloat16  # More stable than FP16
   
   # Gradient accumulation for larger effective batch (CRITICAL for memory)
-  gradient_accumulation_steps: 8  # Effective batch size = 1 * 8 = 8
+  gradient_accumulation_steps: 1  # Start with 1 for testing, increase later
   
   # Gradient checkpointing to save memory (trade speed for memory)
-  gradient_checkpointing: true  # Enable if still OOM
+  gradient_checkpointing: false  # Disabled for now, enable if still OOM
   
   # Checkpointing
   save_interval: 5

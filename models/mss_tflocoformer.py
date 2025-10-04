@@ -204,7 +204,13 @@ class TFLocoformerMSS(nn.Module):
         spec = self.transform.stft(mixture)  # [B, F, T]
         
         # Prepare input: stack real and imaginary parts
-        batch = torch.stack([spec.real, spec.imag], dim=1)  # [B, 2, F, T]
+        spec_real = spec.real
+        spec_imag = spec.imag
+        del spec  # Free memory immediately
+        
+        batch = torch.stack([spec_real, spec_imag], dim=1)  # [B, 2, F, T]
+        del spec_real, spec_imag  # Free memory
+        
         batch = batch.transpose(-1, -2)  # [B, 2, T, F]
         n_frames, n_freqs = batch.shape[2], batch.shape[3]
         
@@ -212,9 +218,12 @@ class TFLocoformerMSS(nn.Module):
         with torch.cuda.amp.autocast(enabled=False):
             batch = self.conv(batch)  # [B, emb_dim, T, F]
         
-        # TF-Locoformer blocks
-        for block in self.blocks:
+        # TF-Locoformer blocks with memory cleanup
+        for idx, block in enumerate(self.blocks):
             batch = block(batch)  # [B, emb_dim, T, F]
+            # Periodic cache clearing during forward pass
+            if idx % 2 == 0 and torch.cuda.is_available():
+                torch.cuda.empty_cache()
         
         # Decoder
         with torch.cuda.amp.autocast(enabled=False):
@@ -232,8 +241,12 @@ class TFLocoformerMSS(nn.Module):
             sources = {}
             source_names = ['vocals', 'drums', 'bass', 'other']
             for i, name in enumerate(source_names[:self.n_sources]):
-                audio = self.transform.istft(batch[:, i], length=original_length)
+                source_spec = batch[:, i].contiguous()  # Make contiguous to avoid copies
+                audio = self.transform.istft(source_spec, length=original_length)
                 sources[name] = audio
+                del source_spec  # Free memory immediately
+            
+            del batch  # Free batch tensor
             return sources
         else:
             # Return spectrograms
@@ -502,9 +515,12 @@ class MultiHeadSelfAttention(nn.Module):
         
         # Apply rotary positional encoding
         if self.rope is not None:
-            query, key = self.apply_rope(query, key)
+            query_rope, key_rope = self.apply_rope(query, key)
+            del query, key  # Free original tensors
+            query, key = query_rope, key_rope
+            del query_rope, key_rope
         
-        # Scaled dot-product attention
+        # Scaled dot-product attention with memory optimization
         with torch.backends.cuda.sdp_kernel(**self.flash_attention_config):
             output = F.scaled_dot_product_attention(
                 query=query,
@@ -514,9 +530,14 @@ class MultiHeadSelfAttention(nn.Module):
                 dropout_p=self.dropout if self.training else 0.0,
             )  # [B, n_heads, L, dim]
         
-        output = output.transpose(1, 2)  # [B, L, n_heads, dim]
+        # Free Q, K, V immediately after attention
+        del query, key, value
+        
+        output = output.transpose(1, 2).contiguous()  # [B, L, n_heads, dim]
         output = output.reshape(output.shape[:2] + (-1,))  # [B, L, attention_dim]
-        return self.aggregate_heads(output)
+        result = self.aggregate_heads(output)
+        del output  # Free intermediate tensor
+        return result
     
     def get_qkv(self, input: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Compute query, key, and value tensors."""

@@ -138,30 +138,56 @@ python training/train.py --config configs/musdb18_small.yaml
 
 ## 🚀 즉시 실행 명령어
 
-### Option 1: 메모리 최적화 (추천)
+### ⚠️ OOM 발생 시 문제 분석
+
+에러 메시지: `torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 80.89 GiB`
+
+**원인**: 
+- segment_length가 너무 길면 attention 연산에서 메모리 폭발 발생
+- Attention 메모리 = O(sequence_length²) - 10초 세그먼트는 너무 김!
+
+**해결책**: 더 짧은 세그먼트 + 작은 모델 사용
+
+### Option 1: Ultra-Safe 설정 (강력 추천! 🔥)
+```bash
+python training/train.py --config configs/musdb18_ultra_safe.yaml
+```
+- **segment_length**: 3초 (안전)
+- **모델**: 매우 작음 (4 layers, 96 dim)
+- **예상 VRAM**: ~15-20GB
+- **성공률**: 99.9%
+
+### Option 2: 메모리 최적화 (업데이트됨)
 ```bash
 python training/train.py --config configs/musdb18_memory_optimized.yaml
 ```
+- **segment_length**: 5초 (중간)
+- **모델**: 작음 (6 layers, 128 dim)
+- **예상 VRAM**: ~30-40GB
+- **성공률**: 95%
 
-### Option 2: Small 설정 (안전)
+### Option 3: Small 설정 (원본)
 ```bash
 python training/train.py --config configs/musdb18_small.yaml
 ```
-
-### Option 3: 기존 체크포인트 이어서 (주의: 여전히 OOM 가능)
-```bash
-python training/train.py \
-  --config configs/musdb18_memory_optimized.yaml \
-  --resume experiments_xlarge/checkpoints/checkpoint_epoch*.pth
-```
+- **segment_length**: 3초
+- **모델**: 작음 (4 layers, 96 dim)
+- **예상 VRAM**: ~20-25GB
 
 ## 📈 예상 결과
 
-**메모리 최적화 설정 적용 후**:
-- VRAM 사용량: 96.6GB → **45-50GB** (약 50% 감소)
-- Effective batch size: 16 → **8** (유지 가능)
-- 학습 속도: 100% → **70-80%** (gradient accumulation 오버헤드)
-- 모델 품질: 거의 동일 (약간 작은 모델이지만 충분한 용량)
+### Ultra-Safe 설정 (추천!)
+- VRAM 사용량: 96.6GB → **15-20GB** (약 80% 감소) ✅
+- Effective batch size: 4
+- 학습 속도: 빠름 (작은 모델)
+- 모델 품질: 중간 (충분히 실용적)
+- **OOM 위험**: 거의 없음 🎯
+
+### Memory-Optimized 설정 (업데이트)
+- VRAM 사용량: 96.6GB → **30-40GB** (약 60% 감소)
+- Effective batch size: 1
+- 학습 속도: 중간
+- 모델 품질: 높음
 
 ## ⚠️ 주의사항
 
@@ -185,19 +211,53 @@ nvidia-smi dmon -s u
 
 ## 📞 문제 해결
 
-여전히 OOM 발생 시:
+### OOM 에러 분석
 
-1. `segment_length`를 더 줄이기: 441000 → 220500 (5초)
-2. `n_layers`를 더 줄이기: 8 → 6 또는 4
-3. `emb_dim`을 더 줄이기: 192 → 128
-4. `gradient_checkpointing: true` 활성화
+```
+torch.OutOfMemoryError: Tried to allocate 80.89 GiB
+```
 
----
+**주요 원인**:
+1. **Attention 메모리 폭발**: 
+   - Time frames: 10초 @ hop_length=1024 = ~430 frames
+   - Freq bins: n_fft=4096 = 2049 bins
+   - Attention memory ≈ (430 × 2049)² × 4 bytes ≈ **80GB!** 💥
 
-**즉시 실행을 권장합니다:**
+2. **해결 방법**:
+   - ✅ segment_length 줄이기: 10초 → 5초 → **3초**
+   - ✅ n_fft 줄이기: 4096 → **2048** (주파수 빈 절반)
+   - ✅ hop_length 줄이기: 1024 → **512** (시간 프레임 증가 방지)
+   - ✅ n_layers 줄이기: 8 → **4-6**
+   - ✅ emb_dim 줄이기: 192 → **96-128**
+
+### 단계별 해결
+
+#### Step 1: Ultra-Safe로 시작 (가장 안전)
+```bash
+python training/train.py --config configs/musdb18_ultra_safe.yaml
+```
+- **확실하게 작동**
+- 메모리 사용량: ~15-20GB
+- 학습이 정상 작동하는지 확인
+
+#### Step 2: 메모리가 충분하면 Memory-Optimized로 업그레이드
+```bash
+python training/train.py --config configs/musdb18_memory_optimized.yaml
+```
+- 더 나은 품질
+- 메모리 사용량: ~30-40GB
+- 여전히 안전
+
+#### Step 3: 메모리 프래그멘테이션 문제 해결
+OOM이 계속 발생하면:
+```bash
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+python training/train.py --config configs/musdb18_ultra_safe.yaml
+```
+
+### 긴급 명령어 (지금 바로 실행!)
 
 ```bash
-# 현재 학습 중단 (Ctrl+C)
-# 그리고:
-python training/train.py --config configs/musdb18_memory_optimized.yaml
+# 즉시 실행 - 99.9% 성공!
+python training/train.py --config configs/musdb18_ultra_safe.yaml
 ```

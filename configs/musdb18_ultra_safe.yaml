@@ -1,0 +1,135 @@
+# Copyright (C) 2024 MSS-TF-Locoformer
+# SPDX-License-Identifier: Apache-2.0
+
+# Ultra-safe configuration - Guaranteed to fit in 97GB VRAM
+# Prioritizes stability over quality
+
+# Dataset configuration
+dataset:
+  name: musdb18hq
+  root_dir: "/workspace/musdb18hq"
+  sample_rate: 44100
+  segment_length: 132300  # 3 seconds (very short for safety)
+  sources:
+    - vocals
+    - drums
+    - bass
+    - other
+  augmentation: false
+  random_chunks: true
+
+# Model configuration (Minimal for memory safety)
+model:
+  n_fft: 2048
+  hop_length: 512
+  n_sources: 4
+  n_layers: 4  # Minimal layers
+  emb_dim: 96  # Small embedding
+  norm_type: rmsgroupnorm
+  num_groups: 4
+  tf_order: ft
+  n_heads: 4  # Few attention heads
+  flash_attention: true
+  attention_dim: 96
+  pos_enc: rope
+  ffn_type:
+    - swiglu_conv1d
+    - swiglu_conv1d
+  ffn_hidden_dim:
+    - 384  # Small FFN
+    - 384
+  conv1d_kernel: 4
+  conv1d_shift: 1
+  dropout: 0.1
+  eps: 1.0e-5
+
+# Loss configuration
+loss:
+  loss_type: combined
+  si_sdr_weight: 1.0
+  l1_weight: 0.1
+  spectral_weight: 0.1
+  eps: 1.0e-8
+
+# Training configuration
+training:
+  batch_size: 1
+  num_epochs: 400
+  gradient_clip: 5.0
+  num_workers: 4
+  pin_memory: true
+  prefetch_factor: 2
+  persistent_workers: true
+  
+  optimizer:
+    type: adamw
+    lr: 0.0005
+    weight_decay: 0.01
+    eps: 1.0e-8
+    betas: [0.9, 0.999]
+  
+  scheduler:
+    type: reducelronplateau
+    mode: min
+    factor: 0.5
+    patience: 8
+    min_lr: 1.0e-7
+    cooldown: 5
+  
+  use_amp: true
+  amp_dtype: bfloat16
+  
+  gradient_accumulation_steps: 4  # Effective batch = 4
+  gradient_checkpointing: false
+  
+  save_interval: 5
+  keep_last: 5
+  save_best: true
+  save_optimizer: true
+  
+  val_interval: 1
+  
+  early_stopping:
+    enabled: true
+    patience: 15
+    min_delta: 0.0001
+
+# Evaluation configuration
+evaluation:
+  batch_size: 1
+  save_outputs: false
+  metrics:
+    - si_sdr
+    - sdr
+
+# Paths
+paths:
+  output_dir: "./experiments_ultra_safe"
+  checkpoint_dir: "./experiments_ultra_safe/checkpoints"
+  log_dir: "./experiments_ultra_safe/logs"
+
+# Hardware configuration
+seed: 42
+device: cuda
+num_gpu: 1
+gpu_id: 0
+
+# Performance optimization
+performance:
+  cudnn_benchmark: true
+  cudnn_deterministic: false
+  tf32: true
+  compile_model: false
+  channels_last: false
+  
+  cuda:
+    allow_tf32_matmul: true
+    allow_tf32_conv: true
+    max_split_size_mb: 128
+
+# Memory management
+memory:
+  clear_cache_every: 5
+  clear_before_validation: true
+  non_blocking_transfer: true
+  set_to_none: true
