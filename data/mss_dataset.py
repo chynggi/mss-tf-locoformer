@@ -29,9 +29,15 @@ class MUSDBDataset(Dataset):
         segment_length (Optional[int]): Length of audio segments in samples. 
             If None, use full tracks. Default: None
         sources (List[str]): List of source names to load. 
-            Default: ['vocals', 'drums', 'bass', 'other']
+            Default: ['vocals', 'other'] (where 'other' = bass+drums+other)
         augmentation (bool): Apply data augmentation. Default: False
         random_chunks (bool): Extract random chunks from tracks. Default: True
+        
+    Note:
+        This dataset expects a reduced file structure with only 3 files per track:
+        - mixture.wav: full mix
+        - vocals.wav: vocal track
+        - other.wav: accompaniment (bass + drums + other instruments combined)
     """
     
     def __init__(
@@ -40,7 +46,7 @@ class MUSDBDataset(Dataset):
         subset: str = 'train',
         sample_rate: int = 44100,
         segment_length: Optional[int] = None,
-        sources: List[str] = ['vocals', 'drums', 'bass', 'other'],
+        sources: List[str] = ['vocals', 'other'],
         augmentation: bool = False,
         random_chunks: bool = True,
     ):
@@ -79,9 +85,7 @@ class MUSDBDataset(Dataset):
             Dict[str, torch.Tensor]: Dictionary containing:
                 - 'mixture': Mixed audio [2, T]
                 - 'vocals': Vocals source [2, T]
-                - 'drums': Drums source [2, T]
-                - 'bass': Bass source [2, T]
-                - 'other': Other instruments source [2, T]
+                - 'other': Accompaniment (bass+drums+other) [2, T]
         """
         track_dir = self.track_dirs[idx]
         
