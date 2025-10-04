@@ -478,7 +478,7 @@ class MultiHeadSelfAttention(nn.Module):
         if flash_attention:
             self.flash_attention_config = dict(
                 enable_flash=True,
-                enable_math=False,
+                enable_math=True,  # Fallback to math kernel if flash not available
                 enable_mem_efficient=False
             )
         else:
@@ -487,6 +487,8 @@ class MultiHeadSelfAttention(nn.Module):
                 enable_math=True,
                 enable_mem_efficient=True
             )
+        
+        self.use_flash_attention = flash_attention
     
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         """Multi-head self-attention forward.
@@ -505,14 +507,26 @@ class MultiHeadSelfAttention(nn.Module):
             query, key = self.apply_rope(query, key)
         
         # Scaled dot-product attention
-        with torch.backends.cuda.sdp_kernel(**self.flash_attention_config):
-            output = F.scaled_dot_product_attention(
-                query=query,
-                key=key,
-                value=value,
-                attn_mask=None,
-                dropout_p=self.dropout if self.training else 0.0,
-            )  # [B, n_heads, L, dim]
+        try:
+            with torch.backends.cuda.sdp_kernel(**self.flash_attention_config):
+                output = F.scaled_dot_product_attention(
+                    query=query,
+                    key=key,
+                    value=value,
+                    attn_mask=None,
+                    dropout_p=self.dropout if self.training else 0.0,
+                )  # [B, n_heads, L, dim]
+        except RuntimeError as e:
+            # Fallback to manual attention computation if no kernel is available
+            if "No available kernel" in str(e):
+                scale = query.size(-1) ** -0.5
+                attn_weights = torch.matmul(query, key.transpose(-2, -1)) * scale
+                attn_weights = F.softmax(attn_weights, dim=-1)
+                if self.training and self.dropout > 0.0:
+                    attn_weights = F.dropout(attn_weights, p=self.dropout)
+                output = torch.matmul(attn_weights, value)
+            else:
+                raise
         
         output = output.transpose(1, 2)  # [B, L, n_heads, dim]
         output = output.reshape(output.shape[:2] + (-1,))  # [B, L, attention_dim]
