@@ -65,7 +65,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def train_epoch(model, dataloader, criterion, optimizer, device, epoch):
+def train_epoch(model, dataloader, criterion, optimizer, device, epoch, scaler=None, amp_dtype=None):
     """Train for one epoch.
     
     Args:
@@ -75,11 +75,14 @@ def train_epoch(model, dataloader, criterion, optimizer, device, epoch):
         optimizer: Optimizer
         device: Device
         epoch: Current epoch number
+        scaler: GradScaler for mixed precision (optional)
+        amp_dtype: dtype for autocast (torch.float16 or torch.bfloat16)
         
     Returns:
         dict: Training metrics
     """
     model.train()
+    use_amp = scaler is not None and amp_dtype is not None
     
     loss_meter = AverageMeter()
     
@@ -96,18 +99,30 @@ def train_epoch(model, dataloader, criterion, optimizer, device, epoch):
         if mixture.ndim == 3 and mixture.shape[1] == 2:
             mixture = mixture.mean(dim=1)
         
-        # Forward pass
-        predictions = model(mixture, return_time_domain=True)
-        
-        # Compute loss
-        loss_dict = criterion(predictions, targets)
-        loss = loss_dict['total_loss']
-        
-        # Backward pass
+        # Forward pass with mixed precision
         optimizer.zero_grad()
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
-        optimizer.step()
+        
+        if use_amp:
+            with torch.cuda.amp.autocast(dtype=amp_dtype):
+                predictions = model(mixture, return_time_domain=True)
+                loss_dict = criterion(predictions, targets)
+                loss = loss_dict['total_loss']
+            
+            # Backward pass with gradient scaling
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            predictions = model(mixture, return_time_domain=True)
+            loss_dict = criterion(predictions, targets)
+            loss = loss_dict['total_loss']
+            
+            # Backward pass without scaling
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+            optimizer.step()
         
         # Update metrics
         loss_meter.update(loss.item(), mixture.size(0))
@@ -123,7 +138,7 @@ def train_epoch(model, dataloader, criterion, optimizer, device, epoch):
     }
 
 
-def validate(model, dataloader, criterion, device):
+def validate(model, dataloader, criterion, device, amp_dtype=None):
     """Validate the model.
     
     Args:
@@ -131,11 +146,13 @@ def validate(model, dataloader, criterion, device):
         dataloader: Validation data loader
         criterion: Loss function
         device: Device
+        amp_dtype: dtype for autocast (torch.float16 or torch.bfloat16, optional)
         
     Returns:
         dict: Validation metrics
     """
     model.eval()
+    use_amp = amp_dtype is not None
     
     loss_meter = AverageMeter()
     
@@ -152,12 +169,16 @@ def validate(model, dataloader, criterion, device):
             if mixture.ndim == 3 and mixture.shape[1] == 2:
                 mixture = mixture.mean(dim=1)
             
-            # Forward pass
-            predictions = model(mixture, return_time_domain=True)
-            
-            # Compute loss
-            loss_dict = criterion(predictions, targets)
-            loss = loss_dict['total_loss']
+            # Forward pass with mixed precision
+            if use_amp:
+                with torch.cuda.amp.autocast(dtype=amp_dtype):
+                    predictions = model(mixture, return_time_domain=True)
+                    loss_dict = criterion(predictions, targets)
+                    loss = loss_dict['total_loss']
+            else:
+                predictions = model(mixture, return_time_domain=True)
+                loss_dict = criterion(predictions, targets)
+                loss = loss_dict['total_loss']
             
             # Update metrics
             loss_meter.update(loss.item(), mixture.size(0))
@@ -181,6 +202,27 @@ def main():
     # Set device
     device = torch.device(f'cuda:{args.gpu}' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
+    
+    # Setup mixed precision training
+    use_amp = config['training'].get('use_amp', False)
+    amp_dtype_str = config['training'].get('amp_dtype', 'bfloat16')
+    
+    scaler = None
+    amp_dtype = None
+    
+    if use_amp and torch.cuda.is_available():
+        if amp_dtype_str == 'bfloat16':
+            amp_dtype = torch.bfloat16
+            # bfloat16 doesn't need GradScaler
+            print("Using automatic mixed precision with bfloat16")
+        elif amp_dtype_str == 'float16':
+            amp_dtype = torch.float16
+            scaler = torch.cuda.amp.GradScaler()
+            print("Using automatic mixed precision with float16")
+        else:
+            raise ValueError(f"Unknown amp_dtype: {amp_dtype_str}")
+    else:
+        print("Training in full precision (float32)")
     
     # Create output directory
     output_dir = args.output_dir or config['paths']['output_dir']
@@ -288,11 +330,11 @@ def main():
         print(f"\nEpoch {epoch+1}/{num_epochs}")
         
         # Train
-        train_metrics = train_epoch(model, train_loader, criterion, optimizer, device, epoch+1)
+        train_metrics = train_epoch(model, train_loader, criterion, optimizer, device, epoch+1, scaler, amp_dtype)
         
         # Validate
         if (epoch + 1) % config['training']['val_interval'] == 0:
-            val_metrics = validate(model, val_loader, criterion, device)
+            val_metrics = validate(model, val_loader, criterion, device, amp_dtype)
             
             # Log metrics
             for key, value in train_metrics.items():
